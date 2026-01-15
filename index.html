@@ -32,6 +32,7 @@
 <div id="label">Knee Angle: --°</div>
 
 <div id="controls">
+  <button id="flipBtn">Flip Camera</button>
   <button id="resetBtn">Reset</button>
   <button id="snapBtn">Snapshot</button>
 </div>
@@ -41,30 +42,57 @@ const video = document.getElementById('video');
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
 const label = document.getElementById('label');
+const flipBtn = document.getElementById('flipBtn');
 const resetBtn = document.getElementById('resetBtn');
 const snapBtn = document.getElementById('snapBtn');
 
 let points = [];
 let dragging = null;
+let stream = null;
+let videoInputs = [];
+let currentCamIndex = 0;
 
-// camera (BACK CAMERA)
-async function startCamera() {
-  try {
-    let stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: { exact: "environment" } },
-      audio: false
-    });
-    video.srcObject = stream;
-  } catch(e) {
-    let stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: "environment" },
-      audio: false
-    });
-    video.srcObject = stream;
-  }
+// ========= CAMERA CONTROL =========
+async function listCameras() {
+  const devices = await navigator.mediaDevices.enumerateDevices();
+  videoInputs = devices.filter(d => d.kind === "videoinput");
+
+  // prioritize back camera if labeled
+  videoInputs.sort((a,b) =>
+    b.label.toLowerCase().includes("back") - a.label.toLowerCase().includes("back")
+  );
 }
-startCamera();
 
+async function startCamera() {
+  if (stream) {
+    stream.getTracks().forEach(t => t.stop());
+  }
+
+  const deviceId = videoInputs[currentCamIndex]?.deviceId;
+
+  stream = await navigator.mediaDevices.getUserMedia({
+    video: { deviceId: { exact: deviceId } },
+    audio: false
+  });
+
+  video.srcObject = stream;
+}
+
+flipBtn.onclick = () => {
+  if (videoInputs.length > 1) {
+    currentCamIndex = (currentCamIndex + 1) % videoInputs.length;
+    startCamera();
+  }
+};
+
+async function initCamera() {
+  await listCameras();
+  await startCamera();
+}
+
+initCamera();
+
+// ========= CANVAS + ANGLE =========
 function resize(){
   canvas.width = window.innerWidth;
   canvas.height = window.innerHeight;
@@ -76,8 +104,8 @@ function calcAngle(A,B,C){
   const v1 = {x:A.x-B.x, y:A.y-B.y};
   const v2 = {x:C.x-B.x, y:C.y-B.y};
   const dot = v1.x*v2.x + v1.y*v2.y;
-  const mag1 = Math.sqrt(v1.x**2 + v1.y**2);
-  const mag2 = Math.sqrt(v2.x**2 + v2.y**2);
+  const mag1 = Math.hypot(v1.x,v1.y);
+  const mag2 = Math.hypot(v2.x,v2.y);
   const theta = Math.acos(dot/(mag1*mag2));
   return theta * 180/Math.PI;
 }
@@ -116,6 +144,7 @@ function draw(){
 }
 draw();
 
+// ========= TOUCH =========
 function getTouchPos(e){
   const t = e.touches[0];
   return {x:t.clientX, y:t.clientY};
@@ -125,9 +154,7 @@ canvas.addEventListener('touchstart',e=>{
   const pos = getTouchPos(e);
 
   for(let p of points){
-    const dx = pos.x-p.x;
-    const dy = pos.y-p.y;
-    if(Math.sqrt(dx*dx + dy*dy) < 20){
+    if(Math.hypot(pos.x-p.x, pos.y-p.y) < 20){
       dragging = p;
       return;
     }
@@ -147,25 +174,21 @@ canvas.addEventListener('touchmove',e=>{
   }
 });
 
-canvas.addEventListener('touchend',()=>{
-  dragging = null;
-});
+canvas.addEventListener('touchend',()=> dragging = null);
 
+// RESET
 resetBtn.onclick = ()=>{ points = []; };
 
+// SNAPSHOT
 snapBtn.onclick = ()=>{
-  const snapCanvas = document.createElement('canvas');
-  snapCanvas.width = canvas.width;
-  snapCanvas.height = canvas.height;
-  const sctx = snapCanvas.getContext('2d');
-
+  const sc=document.createElement('canvas');
+  sc.width=canvas.width; sc.height=canvas.height;
+  const sctx=sc.getContext('2d');
   sctx.drawImage(video,0,0,canvas.width,canvas.height);
   sctx.drawImage(canvas,0,0);
-
-  const url = snapCanvas.toDataURL("image/png");
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = "knee_angle.png";
+  const a=document.createElement('a');
+  a.download="knee_angle.png";
+  a.href=sc.toDataURL();
   a.click();
 };
 </script>
