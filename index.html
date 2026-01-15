@@ -2,27 +2,48 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Knee Angle Demo</title>
+<title>Knee Angle Tracker</title>
 <style>
-  body { margin:0; overflow:hidden; background:black; touch-action:none; }
-  #video {
-    position:absolute; top:0; left:0;
-    width:100vw; height:100vh; object-fit:cover;
-  }
-  #canvas { position:absolute; top:0; left:0; }
-  #label {
-    position:absolute; top:10px; left:10px;
-    background:rgba(0,0,0,0.5); color:white;
-    padding:6px 10px; font-size:20px; border-radius:8px;
-  }
-  #controls {
-    position:absolute; bottom:10px; left:10px;
-    display:flex; gap:10px;
-  }
-  button {
-    padding:8px 14px; font-size:16px; border-radius:8px;
-    background:#222; color:white; border:1px solid #555;
-  }
+body {
+  margin:0;
+  overflow:hidden;
+  background:black;
+  touch-action:none;
+}
+#video {
+  position:absolute;
+  top:0; left:0;
+  width:100vw; height:100vh;
+  object-fit:cover;
+}
+#canvas {
+  position:absolute;
+  top:0; left:0;
+}
+#label {
+  position:absolute;
+  top:10px; left:10px;
+  background:rgba(0,0,0,0.6);
+  color:white;
+  padding:10px 14px;
+  font-size:22px;
+  border-radius:8px;
+}
+#controls {
+  position:absolute;
+  bottom:10px; left:10px;
+  display:flex;
+  gap:12px;
+}
+button {
+  padding:14px 22px;
+  font-size:22px;
+  border-radius:10px;
+  background:#222;
+  color:white;
+  border:1px solid #555;
+  min-width:130px;
+}
 </style>
 </head>
 <body>
@@ -32,165 +53,232 @@
 <div id="label">Knee Angle: --°</div>
 
 <div id="controls">
-  <button id="flipBtn">Flip Camera</button>
+  <button id="startBtn">Start</button>
+  <button id="flipBtn">Flip</button>
+  <button id="fixBtn">Fix</button>
   <button id="resetBtn">Reset</button>
-  <button id="snapBtn">Snapshot</button>
+  <button id="snapBtn">Snap</button>
 </div>
 
+<script async src="https://docs.opencv.org/4.x/opencv.js"></script>
 <script>
-const video = document.getElementById('video');
-const canvas = document.getElementById('canvas');
-const ctx = canvas.getContext('2d');
-const label = document.getElementById('label');
-const flipBtn = document.getElementById('flipBtn');
-const resetBtn = document.getElementById('resetBtn');
-const snapBtn = document.getElementById('snapBtn');
+const video = document.getElementById("video");
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d");
+const label = document.getElementById("label");
+
+const startBtn = document.getElementById("startBtn");
+const flipBtn = document.getElementById("flipBtn");
+const fixBtn = document.getElementById("fixBtn");
+const resetBtn = document.getElementById("resetBtn");
+const snapBtn = document.getElementById("snapBtn");
 
 let points = [];
 let dragging = null;
-let stream = null;
+let tracking = false;
+
 let videoInputs = [];
 let currentCamIndex = 0;
+let stream = null;
 
-// ========= CAMERA CONTROL =========
+// tracking vars
+let cap=null;
+let grayPrev=null;
+let grayCurr=null;
+let pPrev=null;
+let angleSmooth=null;
+const alpha = 0.25;
+
+// ----------- CAMERA CONTROL -----------
 async function listCameras() {
   const devices = await navigator.mediaDevices.enumerateDevices();
-  videoInputs = devices.filter(d => d.kind === "videoinput");
-
-  // prioritize back camera if labeled
-  videoInputs.sort((a,b) =>
+  videoInputs = devices.filter(d => d.kind==="videoinput");
+  videoInputs.sort((a,b)=>
     b.label.toLowerCase().includes("back") - a.label.toLowerCase().includes("back")
   );
 }
 
 async function startCamera() {
-  if (stream) {
-    stream.getTracks().forEach(t => t.stop());
-  }
-
+  if(stream) stream.getTracks().forEach(t=>t.stop());
   const deviceId = videoInputs[currentCamIndex]?.deviceId;
-
   stream = await navigator.mediaDevices.getUserMedia({
-    video: { deviceId: { exact: deviceId } },
-    audio: false
+    video:{ deviceId:{ exact:deviceId }},
+    audio:false
   });
-
   video.srcObject = stream;
 }
 
-flipBtn.onclick = () => {
-  if (videoInputs.length > 1) {
-    currentCamIndex = (currentCamIndex + 1) % videoInputs.length;
+flipBtn.onclick = ()=>{
+  if(videoInputs.length>1){
+    currentCamIndex = (currentCamIndex+1) % videoInputs.length;
     startCamera();
   }
 };
 
-async function initCamera() {
+startBtn.onclick = async()=>{
   await listCameras();
   await startCamera();
-}
+};
 
-initCamera();
-
-// ========= CANVAS + ANGLE =========
+// ---------- CANVAS ----------
 function resize(){
-  canvas.width = window.innerWidth;
-  canvas.height = window.innerHeight;
+  canvas.width = innerWidth;
+  canvas.height = innerHeight;
 }
 resize();
-window.addEventListener('resize', resize);
+onresize = resize;
 
+// ---------- ANGLE ----------
 function calcAngle(A,B,C){
-  const v1 = {x:A.x-B.x, y:A.y-B.y};
-  const v2 = {x:C.x-B.x, y:C.y-B.y};
-  const dot = v1.x*v2.x + v1.y*v2.y;
-  const mag1 = Math.hypot(v1.x,v1.y);
-  const mag2 = Math.hypot(v2.x,v2.y);
-  const theta = Math.acos(dot/(mag1*mag2));
-  return theta * 180/Math.PI;
+  const v1={x:A.x-B.x,y:A.y-B.y};
+  const v2={x:C.x-B.x,y:C.y-B.y};
+  const dot=v1.x*v2.x+v1.y*v2.y;
+  const m1=Math.hypot(v1.x,v1.y);
+  const m2=Math.hypot(v2.x,v2.y);
+  const t=Math.acos(dot/(m1*m2));
+  return t*180/Math.PI;
 }
 
-function draw(){
-  ctx.clearRect(0,0,canvas.width,canvas.height);
-
-  if(points.length > 0){
-    points.forEach(p=>{
-      ctx.fillStyle="red";
-      ctx.beginPath();
-      ctx.arc(p.x,p.y,8,0,2*Math.PI);
-      ctx.fill();
-      ctx.fillStyle="white";
-      ctx.font="18px sans-serif";
-      ctx.fillText(p.label, p.x+10, p.y+5);
-    });
-  }
-
-  if(points.length === 3){
-    ctx.strokeStyle="yellow";
-    ctx.lineWidth = 3;
-    ctx.beginPath();
-    ctx.moveTo(points[0].x,points[0].y);
-    ctx.lineTo(points[1].x,points[1].y);
-    ctx.lineTo(points[2].x,points[2].y);
-    ctx.stroke();
-
-    const angle = calcAngle(points[0],points[1],points[2]);
-    label.textContent = "Knee Angle: "+angle.toFixed(1)+"°";
-  } else {
-    label.textContent = "Knee Angle: --°";
-  }
-
-  requestAnimationFrame(draw);
-}
-draw();
-
-// ========= TOUCH =========
+// ---------- TOUCH ----------
 function getTouchPos(e){
-  const t = e.touches[0];
-  return {x:t.clientX, y:t.clientY};
+  const t=e.touches[0];
+  return {x:t.clientX,y:t.clientY};
 }
 
-canvas.addEventListener('touchstart',e=>{
-  const pos = getTouchPos(e);
-
+canvas.addEventListener("touchstart",e=>{
+  if(tracking) return;
+  const pos=getTouchPos(e);
   for(let p of points){
-    if(Math.hypot(pos.x-p.x, pos.y-p.y) < 20){
-      dragging = p;
-      return;
+    if(Math.hypot(pos.x-p.x,pos.y-p.y)<30){
+      dragging=p; return;
     }
   }
-
   if(points.length<3){
     const labels=["A","B","C"];
     points.push({x:pos.x,y:pos.y,label:labels[points.length]});
   }
 });
 
-canvas.addEventListener('touchmove',e=>{
+canvas.addEventListener("touchmove",e=>{
+  if(tracking) return;
   if(dragging){
-    const pos = getTouchPos(e);
-    dragging.x = pos.x;
-    dragging.y = pos.y;
+    const pos=getTouchPos(e);
+    dragging.x=pos.x; dragging.y=pos.y;
   }
 });
 
-canvas.addEventListener('touchend',()=> dragging = null);
+canvas.addEventListener("touchend",()=> dragging=null);
 
-// RESET
-resetBtn.onclick = ()=>{ points = []; };
+// ---------- FIX (START TRACKING) ----------
+fixBtn.onclick = ()=>{
+  if(points.length!==3 || tracking===true) return;
+  tracking=true;
 
-// SNAPSHOT
+  cap=new cv.VideoCapture(video);
+  grayPrev=new cv.Mat();
+  grayCurr=new cv.Mat();
+
+  pPrev=cv.matFromArray(3,1,cv.CV_32FC2,points.flatMap(p=>[p.x,p.y]));
+};
+
+// ---------- RESET ----------
+resetBtn.onclick = ()=>{
+  tracking=false;
+  points=[];
+  angleSmooth=null;
+};
+
+// ---------- SNAPSHOT ----------
 snapBtn.onclick = ()=>{
-  const sc=document.createElement('canvas');
+  const sc=document.createElement("canvas");
   sc.width=canvas.width; sc.height=canvas.height;
-  const sctx=sc.getContext('2d');
+  const sctx=sc.getContext("2d");
   sctx.drawImage(video,0,0,canvas.width,canvas.height);
   sctx.drawImage(canvas,0,0);
-  const a=document.createElement('a');
-  a.download="knee_angle.png";
+  const a=document.createElement("a");
   a.href=sc.toDataURL();
+  a.download="knee.png";
   a.click();
 };
+
+// ---------- RENDER LOOP ----------
+function render(){
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+
+  if(!tracking){
+    if(points.length){
+      points.forEach(p=>{
+        ctx.fillStyle="red"; ctx.beginPath();
+        ctx.arc(p.x,p.y,10,0,2*Math.PI); ctx.fill();
+        ctx.fillStyle="white"; ctx.font="22px sans-serif";
+        ctx.fillText(p.label,p.x+14,p.y+8);
+      });
+    }
+    if(points.length===3){
+      ctx.strokeStyle="yellow"; ctx.lineWidth=4;
+      ctx.beginPath();
+      ctx.moveTo(points[0].x,points[0].y);
+      ctx.lineTo(points[1].x,points[1].y);
+      ctx.lineTo(points[2].x,points[2].y);
+      ctx.stroke();
+      label.textContent="Knee Angle: "+calcAngle(points[0],points[1],points[2]).toFixed(1)+"°";
+    } else label.textContent="Knee Angle: --°";
+
+    return requestAnimationFrame(render);
+  }
+
+  let frame=new cv.Mat(canvas.height,canvas.width,cv.CV_8UC4);
+  cap.read(frame);
+  cv.cvtColor(frame,grayCurr,cv.COLOR_RGBA2GRAY);
+
+  if(grayPrev.cols>0){
+    let pNext=new cv.Mat();
+    let status=new cv.Mat();
+    let err=new cv.Mat();
+    cv.calcOpticalFlowPyrLK(
+      grayPrev,grayCurr,pPrev,pNext,status,err,
+      {winSize:new cv.Size(15,15)}
+    );
+
+    let arr=pNext.data32F;
+    points=[
+      {x:arr[0],y:arr[1],label:"A"},
+      {x:arr[2],y:arr[3],label:"B"},
+      {x:arr[4],y:arr[5],label:"C"}
+    ];
+
+    let ang=calcAngle(points[0],points[1],points[2]);
+    angleSmooth=(angleSmooth==null)?ang:alpha*ang+(1-alpha)*angleSmooth;
+    label.textContent="Knee Angle: "+angleSmooth.toFixed(1)+"°";
+
+    pPrev=pNext;
+  }
+
+  points.forEach(p=>{
+    ctx.fillStyle="red"; ctx.beginPath();
+    ctx.arc(p.x,p.y,10,0,2*Math.PI); ctx.fill();
+    ctx.fillStyle="white"; ctx.font="20px sans-serif";
+    ctx.fillText(p.label,p.x+12,p.y+8);
+  });
+
+  ctx.strokeStyle="yellow"; ctx.lineWidth=4;
+  ctx.beginPath();
+  ctx.moveTo(points[0].x,points[0].y);
+  ctx.lineTo(points[1].x,points[1].y);
+  ctx.lineTo(points[2].x,points[2].y);
+  ctx.stroke();
+
+  grayCurr.copyTo(grayPrev);
+  frame.delete();
+  requestAnimationFrame(render);
+}
+
+function waitOpenCV(){
+  if(typeof cv==='undefined') return requestAnimationFrame(waitOpenCV);
+  return requestAnimationFrame(render);
+}
+waitOpenCV();
 </script>
+
 </body>
 </html>
