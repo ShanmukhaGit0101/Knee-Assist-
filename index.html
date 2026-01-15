@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Knee Angle Tracker</title>
 <style>
 body {
@@ -9,6 +10,7 @@ body {
   overflow:hidden;
   background:black;
   touch-action:none;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
 }
 #video {
   position:absolute;
@@ -19,6 +21,8 @@ body {
 #canvas {
   position:absolute;
   top:0; left:0;
+  width:100vw;
+  height:100vh;
 }
 #angleLabel {
   position:absolute;
@@ -52,6 +56,10 @@ body {
   background:#222;
   color:white;
   border:2px solid #555;
+  cursor:pointer;
+}
+#btnPanel button:active {
+  background:#333;
 }
 #startPanel {
   position:absolute;
@@ -70,16 +78,23 @@ body {
   background:#0070ff;
   color:white;
   border:none;
+  cursor:pointer;
+}
+#startPanel button:active {
+  background:#0060dd;
+}
+.hidden {
+  display:none !important;
 }
 </style>
 </head>
 <body>
 
-<video id="video" autoplay playsinline></video>
+<video id="video" autoplay playsinline muted></video>
 <canvas id="canvas"></canvas>
 <div id="angleLabel">Angle: --°</div>
 
-<div id="btnPanel">
+<div id="btnPanel" class="hidden">
   <button id="fixBtn">Fix</button>
   <button id="snapBtn">Snap</button>
   <button id="resetBtn">Reset</button>
@@ -90,243 +105,400 @@ body {
   <button id="startBtn">Start Camera</button>
 </div>
 
-<script async src="https://docs.opencv.org/4.x/opencv.js"></script>
+<script src="https://docs.opencv.org/4.5.2/opencv.js"></script>
 <script>
-const video=document.getElementById("video");
-const canvas=document.getElementById("canvas");
-const ctx=canvas.getContext("2d");
-const angleLabel=document.getElementById("angleLabel");
+const video = document.getElementById("video");
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d");
+const angleLabel = document.getElementById("angleLabel");
 
-const startBtn=document.getElementById("startBtn");
-const fixBtn=document.getElementById("fixBtn");
-const resetBtn=document.getElementById("resetBtn");
-const snapBtn=document.getElementById("snapBtn");
-const flipBtn=document.getElementById("flipBtn");
+const startBtn = document.getElementById("startBtn");
+const fixBtn = document.getElementById("fixBtn");
+const resetBtn = document.getElementById("resetBtn");
+const snapBtn = document.getElementById("snapBtn");
+const flipBtn = document.getElementById("flipBtn");
+const btnPanel = document.getElementById("btnPanel");
+const startPanel = document.getElementById("startPanel");
 
 // ---- State ----
-let placement=true;
-let tracking=false;
-let points=[];
-let dragging=null;
+let placement = true;
+let tracking = false;
+let points = [];
+let dragging = null;
+let cvReady = false;
 
 // ---- Camera ----
-let videoInputs=[];
-let currentCam=0;
-let stream=null;
+let videoInputs = [];
+let currentCam = 0;
+let stream = null;
 
 // ---- LK Tracking ----
-let cap=null, grayPrev=null, grayCurr=null, pPrev=null;
-let angleSmooth=null;
-const alpha=0.25;
-let lastAngleUpdate=0;
-const angleCooldown=500;
+let grayPrev = null, grayCurr = null, pPrev = null;
+let angleSmooth = null;
+const alpha = 0.25;
+let lastAngleUpdate = 0;
+const angleCooldown = 100; // Reduced for more responsive updates
+
+// ---- OpenCV Ready Check ----
+function waitForOpenCV() {
+  return new Promise((resolve) => {
+    if (typeof cv !== 'undefined' && cv.Mat) {
+      resolve();
+    } else {
+      setTimeout(() => waitForOpenCV().then(resolve), 100);
+    }
+  });
+}
 
 // ---- Filename ----
-function timestampName(){
-  const d=new Date();
-  const pad=n=>n.toString().padStart(2,'0');
+function timestampName() {
+  const d = new Date();
+  const pad = n => n.toString().padStart(2, '0');
   return `knee_${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}_${pad(d.getHours())}-${pad(d.getMinutes())}-${pad(d.getSeconds())}.png`;
 }
 
 // ---- Camera Handling ----
-async function listCams(){
-  const dev=await navigator.mediaDevices.enumerateDevices();
-  videoInputs=dev.filter(d=>d.kind==="videoinput");
-  videoInputs.sort((a,b)=>b.label.toLowerCase().includes("back")-a.label.toLowerCase().includes("back"));
+async function listCams() {
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    videoInputs = devices.filter(d => d.kind === "videoinput");
+    // Prefer back camera on mobile
+    videoInputs.sort((a, b) => {
+      const aBack = a.label.toLowerCase().includes("back") ? 1 : 0;
+      const bBack = b.label.toLowerCase().includes("back") ? 1 : 0;
+      return bBack - aBack;
+    });
+  } catch (err) {
+    console.error("Error listing cameras:", err);
+  }
 }
-async function startCam(){
-  if(stream) stream.getTracks().forEach(t=>t.stop());
-  const id=videoInputs[currentCam].deviceId;
-  stream=await navigator.mediaDevices.getUserMedia({video:{deviceId:{exact:id}},audio:false});
-  video.srcObject=stream;
+
+async function startCam() {
+  try {
+    if (stream) {
+      stream.getTracks().forEach(t => t.stop());
+    }
+    
+    const constraints = videoInputs.length > 0 && videoInputs[currentCam]
+      ? { video: { deviceId: { exact: videoInputs[currentCam].deviceId } }, audio: false }
+      : { video: { facingMode: "environment" }, audio: false };
+    
+    stream = await navigator.mediaDevices.getUserMedia(constraints);
+    video.srcObject = stream;
+    
+    // Wait for video to be ready
+    await new Promise((resolve) => {
+      video.onloadedmetadata = () => {
+        video.play();
+        resolve();
+      };
+    });
+    
+    startPanel.classList.add("hidden");
+    btnPanel.classList.remove("hidden");
+    resize();
+  } catch (err) {
+    console.error("Error starting camera:", err);
+    alert("Camera access denied or unavailable. Please grant camera permissions.");
+  }
 }
-flipBtn.onclick=()=>{
-  if(videoInputs.length>1){
-    currentCam=(currentCam+1)%videoInputs.length;
-    startCam();
+
+flipBtn.onclick = async () => {
+  if (videoInputs.length > 1) {
+    currentCam = (currentCam + 1) % videoInputs.length;
+    await startCam();
+    // Reset tracking when flipping camera
+    if (tracking) {
+      resetTracking();
+    }
   }
 };
-startBtn.onclick=async()=>{
+
+startBtn.onclick = async () => {
   await listCams();
   await startCam();
 };
 
+// ---- Auto-start camera ----
+async function autoStartCamera() {
+  await waitForOpenCV();
+  cvReady = true;
+  await listCams();
+  // Try to auto-start, but don't force it if it fails
+  try {
+    await startCam();
+  } catch (err) {
+    // If auto-start fails, user needs to click the button
+    console.log("Auto-start failed, waiting for user action");
+  }
+}
+
 // ---- Canvas ----
-function resize(){
-  canvas.width=innerWidth;
-  canvas.height=innerHeight;
+function resize() {
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
 }
-resize(); onresize=resize;
+resize();
+window.onresize = resize;
 
-// ---- Angle ----
-function calcAngle(A,B,C){
-  const v1={x:A.x-B.x,y:A.y-B.y};
-  const v2={x:C.x-B.x,y:C.y-B.y};
-  const dot=v1.x*v2.x+v1.y*v2.y;
-  const m1=Math.hypot(v1.x,v1.y);
-  const m2=Math.hypot(v2.x,v2.y);
-  return Math.acos(dot/(m1*m2))*180/Math.PI;
-}
-
-// ---- Touch Placement ----
-function getTouch(e){
-  const t=e.touches[0];
-  return{x:t.clientX,y:t.clientY};
+// ---- Angle Calculation ----
+function calcAngle(A, B, C) {
+  const v1 = { x: A.x - B.x, y: A.y - B.y };
+  const v2 = { x: C.x - B.x, y: C.y - B.y };
+  const dot = v1.x * v2.x + v1.y * v2.y;
+  const m1 = Math.hypot(v1.x, v1.y);
+  const m2 = Math.hypot(v2.x, v2.y);
+  if (m1 === 0 || m2 === 0) return 0;
+  const cosAngle = Math.max(-1, Math.min(1, dot / (m1 * m2))); // Clamp for accuracy
+  return Math.acos(cosAngle) * 180 / Math.PI;
 }
 
-canvas.addEventListener("touchstart",e=>{
-  if(!placement) return;
-  const p=getTouch(e);
-  for(let q of points){
-    if(Math.hypot(p.x-q.x,p.y-q.y)<35){ dragging=q; return; }
+// ---- Touch Handling ----
+function getTouch(e) {
+  e.preventDefault();
+  const rect = canvas.getBoundingClientRect();
+  const t = e.touches[0];
+  return { x: t.clientX - rect.left, y: t.clientY - rect.top };
+}
+
+canvas.addEventListener("touchstart", e => {
+  if (!placement) return;
+  const p = getTouch(e);
+  
+  // Check if touching existing point
+  for (let q of points) {
+    if (Math.hypot(p.x - q.x, p.y - q.y) < 40) {
+      dragging = q;
+      return;
+    }
   }
-  if(points.length<3){
-    const L=["A","B","C"];
-    points.push({x:p.x,y:p.y,label:L[points.length]});
+  
+  // Add new point if less than 3
+  if (points.length < 3) {
+    const labels = ["A", "B", "C"];
+    points.push({ x: p.x, y: p.y, label: labels[points.length] });
   }
 });
-canvas.addEventListener("touchmove",e=>{
-  if(!placement) return;
-  if(dragging){
-    const p=getTouch(e);
-    dragging.x=p.x; dragging.y=p.y;
-  }
+
+canvas.addEventListener("touchmove", e => {
+  if (!placement || !dragging) return;
+  const p = getTouch(e);
+  dragging.x = p.x;
+  dragging.y = p.y;
 });
-canvas.addEventListener("touchend",()=> dragging=null);
+
+canvas.addEventListener("touchend", () => {
+  dragging = null;
+});
 
 // ---- Fix -> Start Tracking ----
-fixBtn.onclick=()=>{
-  if(points.length!==3 || tracking) return;
-  placement=false;
-  tracking=true;
-  cap=new cv.VideoCapture(video);
-  grayPrev=new cv.Mat();
-  grayCurr=new cv.Mat();
-  pPrev=cv.matFromArray(3,1,cv.CV_32FC2,points.flatMap(p=>[p.x,p.y]));
+fixBtn.onclick = () => {
+  if (points.length !== 3 || tracking || !cvReady) return;
+  placement = false;
+  tracking = true;
+  
+  // Initialize OpenCV matrices
+  grayPrev = new cv.Mat();
+  grayCurr = new cv.Mat();
+  pPrev = cv.matFromArray(3, 1, cv.CV_32FC2, points.flatMap(p => [p.x, p.y]));
 };
 
-// ---- Reset -> Back to Placement ----
-resetBtn.onclick=()=>{
-  tracking=false;
-  placement=true;
-  points=[];
-  dragging=null;
-  angleSmooth=null;
-  lastAngleUpdate=0;
-  pPrev=null;
-  grayPrev=null;
-  grayCurr=null;
-  cap=null;
-  angleLabel.textContent="Angle: --°";
-};
+// ---- Reset Tracking ----
+function resetTracking() {
+  tracking = false;
+  placement = true;
+  points = [];
+  dragging = null;
+  angleSmooth = null;
+  lastAngleUpdate = 0;
+  
+  // Clean up OpenCV matrices
+  if (pPrev) { pPrev.delete(); pPrev = null; }
+  if (grayPrev) { grayPrev.delete(); grayPrev = null; }
+  if (grayCurr) { grayCurr.delete(); grayCurr = null; }
+  
+  angleLabel.textContent = "Angle: --°";
+}
+
+resetBtn.onclick = resetTracking;
 
 // ---- Snapshot ----
-snapBtn.onclick=()=>{
-  const sc=document.createElement("canvas");
-  sc.width=canvas.width; sc.height=canvas.height;
-  const sctx=sc.getContext("2d");
-  sctx.drawImage(video,0,0,canvas.width,canvas.height);
-  sctx.drawImage(canvas,0,0);
-  sctx.font="38px sans-serif";
-  sctx.fillStyle="white";
-  sctx.fillText(angleLabel.textContent,canvas.width/2-160,60);
-  const a=document.createElement("a");
-  a.href=sc.toDataURL();
-  a.download=timestampName();
+snapBtn.onclick = () => {
+  const sc = document.createElement("canvas");
+  sc.width = canvas.width;
+  sc.height = canvas.height;
+  const sctx = sc.getContext("2d");
+  
+  // Draw video frame
+  sctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+  
+  // Draw overlay
+  sctx.drawImage(canvas, 0, 0);
+  
+  // Draw angle text
+  sctx.font = "bold 38px sans-serif";
+  sctx.fillStyle = "white";
+  sctx.strokeStyle = "black";
+  sctx.lineWidth = 3;
+  const text = angleLabel.textContent;
+  const textWidth = sctx.measureText(text).width;
+  const x = (canvas.width - textWidth) / 2;
+  sctx.strokeText(text, x, 60);
+  sctx.fillText(text, x, 60);
+  
+  // Download
+  const a = document.createElement("a");
+  a.href = sc.toDataURL("image/png");
+  a.download = timestampName();
   a.click();
 };
 
-// ---- Render ----
-function render(){
-  ctx.clearRect(0,0,canvas.width,canvas.height);
+// ---- Render Loop ----
+function render() {
+  if (!cvReady) {
+    requestAnimationFrame(render);
+    return;
+  }
+  
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
 
   // ---- Placement Mode ----
-  if(placement && !tracking){
-    if(points.length===3){
-      ctx.strokeStyle="yellow"; ctx.lineWidth=5;
+  if (placement && !tracking) {
+    if (points.length === 3) {
+      // Draw lines
+      ctx.strokeStyle = "yellow";
+      ctx.lineWidth = 5;
       ctx.beginPath();
-      ctx.moveTo(points[0].x,points[0].y);
-      ctx.lineTo(points[1].x,points[1].y);
-      ctx.lineTo(points[2].x,points[2].y);
+      ctx.moveTo(points[0].x, points[0].y);
+      ctx.lineTo(points[1].x, points[1].y);
+      ctx.lineTo(points[2].x, points[2].y);
       ctx.stroke();
-      angleLabel.textContent="Angle: "+calcAngle(points[0],points[1],points[2]).toFixed(1)+"°";
+      
+      // Calculate and display angle
+      const angle = calcAngle(points[0], points[1], points[2]);
+      angleLabel.textContent = "Angle: " + angle.toFixed(1) + "°";
     }
-    for(let p of points){
-      ctx.fillStyle="red"; ctx.beginPath();
-      ctx.arc(p.x,p.y,14,0,2*Math.PI); ctx.fill();
-      ctx.fillStyle="white"; ctx.font="28px sans-serif";
-      ctx.fillText(p.label,p.x+18,p.y+10);
+    
+    // Draw points
+    for (let p of points) {
+      ctx.fillStyle = "red";
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 14, 0, 2 * Math.PI);
+      ctx.fill();
+      
+      ctx.fillStyle = "white";
+      ctx.font = "bold 28px sans-serif";
+      ctx.fillText(p.label, p.x + 18, p.y + 10);
     }
-    return requestAnimationFrame(render);
+    
+    requestAnimationFrame(render);
+    return;
   }
 
   // ---- Tracking Mode ----
-  if(tracking){
-    let frame=new cv.Mat(canvas.height,canvas.width,cv.CV_8UC4);
+  if (tracking && video.readyState === video.HAVE_ENOUGH_DATA) {
+    let frame = new cv.Mat(video.videoHeight, video.videoWidth, cv.CV_8UC4);
+    let cap = new cv.VideoCapture(video);
     cap.read(frame);
-    cv.cvtColor(frame,grayCurr,cv.COLOR_RGBA2GRAY);
+    
+    // Convert to grayscale
+    cv.cvtColor(frame, grayCurr, cv.COLOR_RGBA2GRAY);
 
-    // If first frame after FIX -> draw manual + initialize prev
-    if(!grayPrev.cols){
-      for(let p of points){
-        ctx.fillStyle="red"; ctx.beginPath();
-        ctx.arc(p.x,p.y,14,0,2*Math.PI); ctx.fill();
-      }
-      ctx.strokeStyle="yellow"; ctx.lineWidth=5;
-      ctx.beginPath();
-      ctx.moveTo(points[0].x,points[0].y);
-      ctx.lineTo(points[1].x,points[1].y);
-      ctx.lineTo(points[2].x,points[2].y);
-      ctx.stroke();
+    // Initialize on first tracking frame
+    if (!grayPrev.cols) {
       grayCurr.copyTo(grayPrev);
       frame.delete();
+      
+      // Draw initial points
+      drawTrackingOverlay();
+      
       requestAnimationFrame(render);
       return;
     }
 
-    // LK update
-    let pNext=new cv.Mat(),st=new cv.Mat(),err=new cv.Mat();
-    cv.calcOpticalFlowPyrLK(grayPrev,grayCurr,pPrev,pNext,st,err,{winSize:new cv.Size(15,15)});
-    let arr=pNext.data32F;
-    points=[
-      {x:arr[0],y:arr[1],label:"A"},
-      {x:arr[2],y:arr[3],label:"B"},
-      {x:arr[4],y:arr[5],label:"C"},
-    ];
+    // Optical flow tracking
+    let pNext = new cv.Mat();
+    let st = new cv.Mat();
+    let err = new cv.Mat();
+    
+    try {
+      cv.calcOpticalFlowPyrLK(
+        grayPrev,
+        grayCurr,
+        pPrev,
+        pNext,
+        st,
+        err,
+        new cv.Size(21, 21),
+        3
+      );
+      
+      // Update points from tracking
+      const arr = pNext.data32F;
+      points = [
+        { x: arr[0], y: arr[1], label: "A" },
+        { x: arr[2], y: arr[3], label: "B" },
+        { x: arr[4], y: arr[5], label: "C" }
+      ];
 
-    let ang=calcAngle(points[0],points[1],points[2]);
-    angleSmooth=(angleSmooth==null)?ang:alpha*ang+(1-alpha)*angleSmooth;
+      // Calculate angle with smoothing
+      const ang = calcAngle(points[0], points[1], points[2]);
+      angleSmooth = (angleSmooth == null) ? ang : alpha * ang + (1 - alpha) * angleSmooth;
 
-    let now=performance.now();
-    if(now-lastAngleUpdate>angleCooldown){
-      angleLabel.textContent="Angle: "+angleSmooth.toFixed(1)+"°";
-      lastAngleUpdate=now;
+      // Update display
+      const now = performance.now();
+      if (now - lastAngleUpdate > angleCooldown) {
+        angleLabel.textContent = "Angle: " + angleSmooth.toFixed(1) + "°";
+        lastAngleUpdate = now;
+      }
+
+      // Update matrices for next frame
+      pNext.copyTo(pPrev);
+      grayCurr.copyTo(grayPrev);
+      
+      // Clean up
+      pNext.delete();
+      st.delete();
+      err.delete();
+    } catch (err) {
+      console.error("Tracking error:", err);
     }
-
-    // draw points + lines always
-    ctx.strokeStyle="yellow"; ctx.lineWidth=5;
-    ctx.beginPath();
-    ctx.moveTo(points[0].x,points[0].y);
-    ctx.lineTo(points[1].x,points[1].y);
-    ctx.lineTo(points[2].x,points[2].y);
-    ctx.stroke();
-
-    for(let p of points){
-      ctx.fillStyle="red"; ctx.beginPath();
-      ctx.arc(p.x,p.y,14,0,2*Math.PI); ctx.fill();
-      ctx.fillStyle="white"; ctx.font="26px sans-serif";
-      ctx.fillText(p.label,p.x+18,p.y+10);
-    }
-
-    pNext.copyTo(pPrev);
-    grayCurr.copyTo(grayPrev);
+    
     frame.delete();
-    return requestAnimationFrame(render);
+    
+    // Draw overlay
+    drawTrackingOverlay();
+  }
+
+  requestAnimationFrame(render);
+}
+
+function drawTrackingOverlay() {
+  // Draw lines
+  ctx.strokeStyle = "yellow";
+  ctx.lineWidth = 5;
+  ctx.beginPath();
+  ctx.moveTo(points[0].x, points[0].y);
+  ctx.lineTo(points[1].x, points[1].y);
+  ctx.lineTo(points[2].x, points[2].y);
+  ctx.stroke();
+
+  // Draw points
+  for (let p of points) {
+    ctx.fillStyle = "red";
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 14, 0, 2 * Math.PI);
+    ctx.fill();
+    
+    ctx.fillStyle = "white";
+    ctx.font = "bold 26px sans-serif";
+    ctx.fillText(p.label, p.x + 18, p.y + 10);
   }
 }
 
-function wait(){ if(typeof cv==="undefined") requestAnimationFrame(wait); else requestAnimationFrame(render); }
-wait();
+// ---- Initialize ----
+autoStartCamera();
+render();
 </script>
 </body>
 </html>
