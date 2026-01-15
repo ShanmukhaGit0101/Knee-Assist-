@@ -47,10 +47,23 @@ const snapBtn = document.getElementById('snapBtn');
 let points = [];
 let dragging = null;
 
-// camera
-navigator.mediaDevices.getUserMedia({video:true}).then(stream=>{
-  video.srcObject = stream;
-});
+// camera (BACK CAMERA)
+async function startCamera() {
+  try {
+    let stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { exact: "environment" } },
+      audio: false
+    });
+    video.srcObject = stream;
+  } catch(e) {
+    let stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: "environment" },
+      audio: false
+    });
+    video.srcObject = stream;
+  }
+}
+startCamera();
 
 function resize(){
   canvas.width = window.innerWidth;
@@ -103,7 +116,6 @@ function draw(){
 }
 draw();
 
-// touch
 function getTouchPos(e){
   const t = e.touches[0];
   return {x:t.clientX, y:t.clientY};
@@ -139,12 +151,8 @@ canvas.addEventListener('touchend',()=>{
   dragging = null;
 });
 
-// RESET
-resetBtn.onclick = ()=>{
-  points = [];
-};
+resetBtn.onclick = ()=>{ points = []; };
 
-// SNAPSHOT
 snapBtn.onclick = ()=>{
   const snapCanvas = document.createElement('canvas');
   snapCanvas.width = canvas.width;
@@ -161,6 +169,5 @@ snapBtn.onclick = ()=>{
   a.click();
 };
 </script>
-
 </body>
 </html>
