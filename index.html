@@ -15,25 +15,23 @@ body {
   top:0; left:0;
   width:100vw; height:100vh;
   object-fit:cover;
-  z-index:0;
 }
 #canvas {
   position:absolute;
   top:0; left:0;
-  z-index:1;
 }
 #angleLabel {
   position:absolute;
   top:20px;
   width:100vw;
   text-align:center;
-  font-size:36px;
+  font-size:38px;
   font-weight:700;
-  padding:10px 0;
+  padding:14px 0;
   color:white;
-  background:rgba(0,0,0,0.5);
+  background:rgba(0,0,0,0.55);
   border-radius:8px;
-  z-index:2;
+  z-index:3;
 }
 #btnPanel {
   position:absolute;
@@ -42,33 +40,34 @@ body {
   display:flex;
   justify-content:center;
   flex-wrap:wrap;
-  gap:16px;
-  z-index:3;
+  gap:18px;
+  z-index:4;
 }
 #btnPanel button {
-  padding:18px 30px;
-  font-size:26px;
+  padding:20px 32px;
+  font-size:28px;
+  font-weight:600;
   border-radius:12px;
-  min-width:160px;
+  min-width:170px;
   background:#222;
   color:white;
   border:2px solid #555;
 }
 #startPanel {
   position:absolute;
-  bottom:20px;
+  bottom:22px;
   width:100vw;
   display:flex;
   justify-content:center;
-  z-index:3;
+  z-index:5;
 }
 #startPanel button {
-  padding:18px 32px;
-  font-size:28px;
-  font-weight:600;
+  padding:22px 34px;
+  font-size:30px;
+  font-weight:700;
   border-radius:12px;
-  min-width:240px;
-  background:#0066ff;
+  min-width:260px;
+  background:#0070ff;
   color:white;
   border:none;
 }
@@ -104,37 +103,41 @@ const resetBtn=document.getElementById("resetBtn");
 const snapBtn=document.getElementById("snapBtn");
 const flipBtn=document.getElementById("flipBtn");
 
+// ---- State ----
+let placement=true;
+let tracking=false;
 let points=[];
 let dragging=null;
-let tracking=false;
 
+// ---- Camera ----
 let videoInputs=[];
 let currentCam=0;
 let stream=null;
 
+// ---- LK Tracking ----
 let cap=null, grayPrev=null, grayCurr=null, pPrev=null;
 let angleSmooth=null;
 const alpha=0.25;
 let lastAngleUpdate=0;
-const angleCooldown=500; //ms
+const angleCooldown=500;
 
-// ------- Timestamp name --------
-function timestampName() {
-  const d = new Date();
-  const pad = (n)=> n.toString().padStart(2,'0');
+// ---- Filename ----
+function timestampName(){
+  const d=new Date();
+  const pad=n=>n.toString().padStart(2,'0');
   return `knee_${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}_${pad(d.getHours())}-${pad(d.getMinutes())}-${pad(d.getSeconds())}.png`;
 }
 
-// ------- Camera ---------
+// ---- Camera Handling ----
 async function listCams(){
   const dev=await navigator.mediaDevices.enumerateDevices();
   videoInputs=dev.filter(d=>d.kind==="videoinput");
-  videoInputs.sort((a,b)=>b.label.toLowerCase().includes("back") - a.label.toLowerCase().includes("back"));
+  videoInputs.sort((a,b)=>b.label.toLowerCase().includes("back")-a.label.toLowerCase().includes("back"));
 }
 async function startCam(){
   if(stream) stream.getTracks().forEach(t=>t.stop());
-  const id=videoInputs[currentCam]?.deviceId;
-  stream = await navigator.mediaDevices.getUserMedia({video:{deviceId:{exact:id}},audio:false});
+  const id=videoInputs[currentCam].deviceId;
+  stream=await navigator.mediaDevices.getUserMedia({video:{deviceId:{exact:id}},audio:false});
   video.srcObject=stream;
 }
 flipBtn.onclick=()=>{
@@ -148,15 +151,14 @@ startBtn.onclick=async()=>{
   await startCam();
 };
 
-// ------ Canvas -------
+// ---- Canvas ----
 function resize(){
   canvas.width=innerWidth;
   canvas.height=innerHeight;
 }
-resize();
-onresize=resize;
+resize(); onresize=resize;
 
-// ----- Angle math -----
+// ---- Angle ----
 function calcAngle(A,B,C){
   const v1={x:A.x-B.x,y:A.y-B.y};
   const v2={x:C.x-B.x,y:C.y-B.y};
@@ -166,22 +168,25 @@ function calcAngle(A,B,C){
   return Math.acos(dot/(m1*m2))*180/Math.PI;
 }
 
-// ----- Touch -----
+// ---- Touch Placement ----
 function getTouch(e){
   const t=e.touches[0];
   return{x:t.clientX,y:t.clientY};
 }
+
 canvas.addEventListener("touchstart",e=>{
-  if(tracking) return;
+  if(!placement) return;
   const p=getTouch(e);
-  for(let q of points) if(Math.hypot(p.x-q.x,p.y-q.y)<35){ dragging=q; return; }
+  for(let q of points){
+    if(Math.hypot(p.x-q.x,p.y-q.y)<35){ dragging=q; return; }
+  }
   if(points.length<3){
     const L=["A","B","C"];
     points.push({x:p.x,y:p.y,label:L[points.length]});
   }
 });
 canvas.addEventListener("touchmove",e=>{
-  if(tracking) return;
+  if(!placement) return;
   if(dragging){
     const p=getTouch(e);
     dragging.x=p.x; dragging.y=p.y;
@@ -189,54 +194,54 @@ canvas.addEventListener("touchmove",e=>{
 });
 canvas.addEventListener("touchend",()=> dragging=null);
 
-// ----- Fix -> Track -----
+// ---- Fix -> Start Tracking ----
 fixBtn.onclick=()=>{
   if(points.length!==3 || tracking) return;
+  placement=false;
   tracking=true;
   cap=new cv.VideoCapture(video);
-  grayPrev=new cv.Mat(); grayCurr=new cv.Mat();
+  grayPrev=new cv.Mat();
+  grayCurr=new cv.Mat();
   pPrev=cv.matFromArray(3,1,cv.CV_32FC2,points.flatMap(p=>[p.x,p.y]));
 };
 
-// ----- Reset -----
+// ---- Reset -> Back to Placement ----
 resetBtn.onclick=()=>{
   tracking=false;
+  placement=true;
   points=[];
+  dragging=null;
   angleSmooth=null;
+  lastAngleUpdate=0;
+  pPrev=null;
+  grayPrev=null;
+  grayCurr=null;
+  cap=null;
   angleLabel.textContent="Angle: --°";
 };
 
-// ----- Snapshot -----
+// ---- Snapshot ----
 snapBtn.onclick=()=>{
   const sc=document.createElement("canvas");
   sc.width=canvas.width; sc.height=canvas.height;
   const sctx=sc.getContext("2d");
   sctx.drawImage(video,0,0,canvas.width,canvas.height);
   sctx.drawImage(canvas,0,0);
-
-  sctx.font="36px sans-serif";
+  sctx.font="38px sans-serif";
   sctx.fillStyle="white";
-  sctx.fillText(angleLabel.textContent,canvas.width/2-150,50);
-
+  sctx.fillText(angleLabel.textContent,canvas.width/2-160,60);
   const a=document.createElement("a");
   a.href=sc.toDataURL();
   a.download=timestampName();
   a.click();
 };
 
-// ----- Render -----
+// ---- Render ----
 function render(){
   ctx.clearRect(0,0,canvas.width,canvas.height);
 
-  if(!tracking){
-    if(points.length){
-      for(let p of points){
-        ctx.fillStyle="red"; ctx.beginPath();
-        ctx.arc(p.x,p.y,14,0,2*Math.PI); ctx.fill();
-        ctx.fillStyle="white"; ctx.font="28px sans-serif";
-        ctx.fillText(p.label,p.x+20,p.y+10);
-      }
-    }
+  // ---- Placement Mode ----
+  if(placement && !tracking){
     if(points.length===3){
       ctx.strokeStyle="yellow"; ctx.lineWidth=5;
       ctx.beginPath();
@@ -246,50 +251,81 @@ function render(){
       ctx.stroke();
       angleLabel.textContent="Angle: "+calcAngle(points[0],points[1],points[2]).toFixed(1)+"°";
     }
+    for(let p of points){
+      ctx.fillStyle="red"; ctx.beginPath();
+      ctx.arc(p.x,p.y,14,0,2*Math.PI); ctx.fill();
+      ctx.fillStyle="white"; ctx.font="28px sans-serif";
+      ctx.fillText(p.label,p.x+18,p.y+10);
+    }
     return requestAnimationFrame(render);
   }
 
-  let frame=new cv.Mat(canvas.height,canvas.width,cv.CV_8UC4);
-  cap.read(frame);
-  cv.cvtColor(frame,grayCurr,cv.COLOR_RGBA2GRAY);
+  // ---- Tracking Mode ----
+  if(tracking){
+    let frame=new cv.Mat(canvas.height,canvas.width,cv.CV_8UC4);
+    cap.read(frame);
+    cv.cvtColor(frame,grayCurr,cv.COLOR_RGBA2GRAY);
 
-  if(grayPrev.cols>0){
+    // If first frame after FIX -> draw manual + initialize prev
+    if(!grayPrev.cols){
+      for(let p of points){
+        ctx.fillStyle="red"; ctx.beginPath();
+        ctx.arc(p.x,p.y,14,0,2*Math.PI); ctx.fill();
+      }
+      ctx.strokeStyle="yellow"; ctx.lineWidth=5;
+      ctx.beginPath();
+      ctx.moveTo(points[0].x,points[0].y);
+      ctx.lineTo(points[1].x,points[1].y);
+      ctx.lineTo(points[2].x,points[2].y);
+      ctx.stroke();
+      grayCurr.copyTo(grayPrev);
+      frame.delete();
+      requestAnimationFrame(render);
+      return;
+    }
+
+    // LK update
     let pNext=new cv.Mat(),st=new cv.Mat(),err=new cv.Mat();
     cv.calcOpticalFlowPyrLK(grayPrev,grayCurr,pPrev,pNext,st,err,{winSize:new cv.Size(15,15)});
     let arr=pNext.data32F;
-    points=[ {x:arr[0],y:arr[1],label:"A"},
-             {x:arr[2],y:arr[3],label:"B"},
-             {x:arr[4],y:arr[5],label:"C"} ];
+    points=[
+      {x:arr[0],y:arr[1],label:"A"},
+      {x:arr[2],y:arr[3],label:"B"},
+      {x:arr[4],y:arr[5],label:"C"},
+    ];
+
     let ang=calcAngle(points[0],points[1],points[2]);
     angleSmooth=(angleSmooth==null)?ang:alpha*ang+(1-alpha)*angleSmooth;
+
     let now=performance.now();
     if(now-lastAngleUpdate>angleCooldown){
       angleLabel.textContent="Angle: "+angleSmooth.toFixed(1)+"°";
       lastAngleUpdate=now;
     }
-    pPrev=pNext;
+
+    // draw points + lines always
+    ctx.strokeStyle="yellow"; ctx.lineWidth=5;
+    ctx.beginPath();
+    ctx.moveTo(points[0].x,points[0].y);
+    ctx.lineTo(points[1].x,points[1].y);
+    ctx.lineTo(points[2].x,points[2].y);
+    ctx.stroke();
+
+    for(let p of points){
+      ctx.fillStyle="red"; ctx.beginPath();
+      ctx.arc(p.x,p.y,14,0,2*Math.PI); ctx.fill();
+      ctx.fillStyle="white"; ctx.font="26px sans-serif";
+      ctx.fillText(p.label,p.x+18,p.y+10);
+    }
+
+    pNext.copyTo(pPrev);
+    grayCurr.copyTo(grayPrev);
+    frame.delete();
+    return requestAnimationFrame(render);
   }
-
-  for(let p of points){
-    ctx.fillStyle="red"; ctx.beginPath();
-    ctx.arc(p.x,p.y,14,0,2*Math.PI); ctx.fill();
-    ctx.fillStyle="white"; ctx.font="26px sans-serif";
-    ctx.fillText(p.label,p.x+18,p.y+10);
-  }
-
-  ctx.strokeStyle="yellow"; ctx.lineWidth=5;
-  ctx.beginPath();
-  ctx.moveTo(points[0].x,points[0].y);
-  ctx.lineTo(points[1].x,points[1].y);
-  ctx.lineTo(points[2].x,points[2].y);
-  ctx.stroke();
-
-  grayCurr.copyTo(grayPrev);
-  frame.delete();
-  requestAnimationFrame(render);
 }
 
-function wait(){ if(typeof cv==='undefined') requestAnimationFrame(wait); else requestAnimationFrame(render); }
+function wait(){ if(typeof cv==="undefined") requestAnimationFrame(wait); else requestAnimationFrame(render); }
 wait();
 </script>
 </body>
