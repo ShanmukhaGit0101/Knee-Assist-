@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Knee Angle Tracker</title>
     <style>
         * {
@@ -12,37 +12,47 @@
             -webkit-tap-highlight-color: transparent;
         }
 
+        html, body {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            position: fixed;
+        }
+
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             background: #000;
-            overflow: hidden;
             touch-action: none;
         }
 
         #container {
-            position: relative;
-            width: 100vw;
-            height: 100vh;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
             display: flex;
             flex-direction: column;
-            align-items: center;
-            justify-content: center;
         }
 
         #videoContainer {
             position: relative;
-            width: 100%;
             flex: 1;
-            display: flex;
-            align-items: center;
-            justify-content: center;
+            width: 100%;
+            overflow: hidden;
             background: #000;
         }
 
         #video {
             display: none;
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
             max-width: 100%;
             max-height: 100%;
+            width: auto;
+            height: auto;
         }
 
         #canvas {
@@ -51,18 +61,20 @@
             left: 50%;
             transform: translate(-50%, -50%);
             touch-action: none;
+            max-width: 100%;
+            max-height: 100%;
         }
 
         #angleDisplay {
             position: absolute;
-            top: 15px;
+            top: 10px;
             left: 50%;
             transform: translateX(-50%);
-            font-size: 32px;
+            font-size: 28px;
             font-weight: 600;
             color: #ffffff;
-            background: rgba(0, 0, 0, 0.65);
-            padding: 8px 20px;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 6px 16px;
             border-radius: 6px;
             z-index: 10;
             font-variant-numeric: tabular-nums;
@@ -70,26 +82,24 @@
         }
 
         #controls {
-            position: absolute;
-            bottom: 0;
+            position: relative;
             width: 100%;
-            background: rgba(0, 0, 0, 0.85);
-            padding: 12px;
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
-            z-index: 5;
+            background: rgba(0, 0, 0, 0.9);
+            padding: 10px;
+            flex-shrink: 0;
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
         }
 
         .button-grid {
             display: grid;
             grid-template-columns: 1fr 1fr;
             gap: 8px;
+            margin-bottom: 8px;
         }
 
         button {
-            padding: 14px;
-            font-size: 15px;
+            padding: 12px;
+            font-size: 14px;
             font-weight: 500;
             border: 1px solid rgba(255, 255, 255, 0.15);
             border-radius: 6px;
@@ -98,34 +108,23 @@
             touch-action: manipulation;
             background: rgba(255, 255, 255, 0.1);
             color: #ffffff;
+            min-height: 44px;
         }
 
-        button:active {
+        button:active:not(:disabled) {
             transform: scale(0.97);
             background: rgba(255, 255, 255, 0.15);
         }
 
-        #fixBtn:not(:disabled) {
-            background: rgba(255, 255, 255, 0.12);
-            border-color: rgba(255, 255, 255, 0.2);
-        }
-
-        #snapBtn:not(:disabled) {
-            background: rgba(255, 255, 255, 0.12);
-            border-color: rgba(255, 255, 255, 0.2);
-        }
-
-        #resetBtn:not(:disabled) {
-            background: rgba(255, 255, 255, 0.12);
-            border-color: rgba(255, 255, 255, 0.2);
-        }
-
+        #fixBtn:not(:disabled),
+        #snapBtn:not(:disabled),
+        #resetBtn:not(:disabled),
         #flipBtn:not(:disabled) {
             background: rgba(255, 255, 255, 0.12);
             border-color: rgba(255, 255, 255, 0.2);
         }
 
-        #startBtn:not(:disabled) {
+        #startBtn {
             background: rgba(255, 255, 255, 0.15);
             border-color: rgba(255, 255, 255, 0.25);
             grid-column: 1 / -1;
@@ -138,19 +137,55 @@
 
         #status {
             position: absolute;
-            top: 60px;
+            top: 50px;
             left: 50%;
             transform: translateX(-50%);
-            color: rgba(255, 255, 255, 0.85);
-            background: rgba(0, 0, 0, 0.6);
-            padding: 6px 14px;
+            color: rgba(255, 255, 255, 0.9);
+            background: rgba(0, 0, 0, 0.7);
+            padding: 5px 12px;
             border-radius: 4px;
-            font-size: 13px;
+            font-size: 12px;
             z-index: 10;
+            max-width: 90%;
+            text-align: center;
         }
 
-        .hidden {
-            display: none !important;
+        /* Ensure proper safe area handling for notched phones */
+        @supports (padding: max(0px)) {
+            #controls {
+                padding-bottom: max(10px, env(safe-area-inset-bottom));
+            }
+            
+            #angleDisplay {
+                top: max(10px, env(safe-area-inset-top));
+            }
+            
+            #status {
+                top: max(50px, calc(env(safe-area-inset-top) + 40px));
+            }
+        }
+
+        /* Landscape adjustments */
+        @media (orientation: landscape) {
+            #angleDisplay {
+                font-size: 24px;
+                padding: 5px 14px;
+            }
+            
+            #status {
+                font-size: 11px;
+                padding: 4px 10px;
+            }
+            
+            button {
+                padding: 10px;
+                font-size: 13px;
+                min-height: 40px;
+            }
+            
+            #controls {
+                padding: 8px;
+            }
         }
     </style>
 </head>
@@ -169,8 +204,8 @@
                 <button id="snapBtn" disabled>Snap</button>
                 <button id="resetBtn" disabled>Reset</button>
                 <button id="flipBtn" disabled>Flip</button>
-                <button id="startBtn">Start Camera</button>
             </div>
+            <button id="startBtn">Start Camera</button>
         </div>
     </div>
 
@@ -236,9 +271,19 @@
                 
                 await video.play();
                 
-                // Set canvas size to match video
-                canvas.width = video.videoWidth;
-                canvas.height = video.videoHeight;
+                // Set canvas size to match video while maintaining aspect ratio
+                const containerRect = document.getElementById('videoContainer').getBoundingClientRect();
+                const videoAspect = video.videoWidth / video.videoHeight;
+                const containerAspect = containerRect.width / containerRect.height;
+                
+                if (containerAspect > videoAspect) {
+                    canvas.height = containerRect.height;
+                    canvas.width = canvas.height * videoAspect;
+                } else {
+                    canvas.width = containerRect.width;
+                    canvas.height = canvas.width / videoAspect;
+                }
+                
                 video.style.display = 'block';
 
                 currentState = STATE.PLACEMENT;
@@ -333,10 +378,27 @@
         function draw() {
             if (!video.videoWidth) return;
 
-            // Draw video frame
-            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            // Clear and draw video frame scaled to canvas
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            const videoAspect = video.videoWidth / video.videoHeight;
+            const canvasAspect = canvas.width / canvas.height;
+            
+            let drawWidth, drawHeight, offsetX = 0, offsetY = 0;
+            
+            if (canvasAspect > videoAspect) {
+                drawHeight = canvas.height;
+                drawWidth = drawHeight * videoAspect;
+                offsetX = (canvas.width - drawWidth) / 2;
+            } else {
+                drawWidth = canvas.width;
+                drawHeight = drawWidth / videoAspect;
+                offsetY = (canvas.height - drawHeight) / 2;
+            }
+            
+            ctx.drawImage(video, offsetX, offsetY, drawWidth, drawHeight);
 
-            // ALWAYS draw points and lines if they exist (during placement AND tracking)
+            // ALWAYS draw points and lines if they exist
             if (points.length > 0) {
                 // Draw lines
                 if (points.length >= 2) {
@@ -370,13 +432,13 @@
                     ctx.fill();
                     
                     // Inner circle
-                    ctx.fillStyle = i === 1 ? '#ffffff' : '#ffffff';
+                    ctx.fillStyle = '#ffffff';
                     ctx.beginPath();
                     ctx.arc(pt.x, pt.y, 6, 0, 2 * Math.PI);
                     ctx.fill();
                     
                     // Center dot
-                    ctx.fillStyle = i === 1 ? '#000000' : '#000000';
+                    ctx.fillStyle = '#000000';
                     ctx.beginPath();
                     ctx.arc(pt.x, pt.y, 2, 0, 2 * Math.PI);
                     ctx.fill();
@@ -439,7 +501,7 @@
             tempCanvas.width = canvas.width;
             tempCanvas.height = canvas.height;
             const tempCtx = tempCanvas.getContext('2d');
-            tempCtx.drawImage(video, 0, 0);
+            tempCtx.drawImage(video, 0, 0, canvas.width, canvas.height);
             const imageData = tempCtx.getImageData(0, 0, canvas.width, canvas.height);
             src.data.set(imageData.data);
             
@@ -458,7 +520,7 @@
             tempCanvas.width = canvas.width;
             tempCanvas.height = canvas.height;
             const tempCtx = tempCanvas.getContext('2d');
-            tempCtx.drawImage(video, 0, 0);
+            tempCtx.drawImage(video, 0, 0, canvas.width, canvas.height);
             
             const src = new cv.Mat(canvas.height, canvas.width, cv.CV_8UC4);
             const imageData = tempCtx.getImageData(0, 0, canvas.width, canvas.height);
@@ -541,47 +603,4 @@
             link.href = canvas.toDataURL();
             link.click();
             
-            updateStatus('Snapshot saved!');
-            setTimeout(() => updateStatus(tracking ? 'Tracking...' : 'Place 3 points'), 2000);
-        });
-
-        resetBtn.addEventListener('click', () => {
-            stopTracking();
-            points = [];
-            smoothedAngle = null;
-            angleDisplay.textContent = '--°';
-            currentState = STATE.PLACEMENT;
-            updateStatus('Tap to place 3 points (A, B, C)');
-            updateButtons();
-        });
-
-        flipBtn.addEventListener('click', async () => {
-            useFrontCamera = !useFrontCamera;
-            const wasTracking = tracking;
-            const savedPoints = [...points];
-            
-            stopTracking();
-            await startCamera();
-            
-            points = savedPoints;
-            if (wasTracking && points.length === 3) {
-                startTracking();
-            }
-        });
-
-        function updateButtons() {
-            fixBtn.disabled = currentState !== STATE.PLACEMENT || points.length !== 3;
-            snapBtn.disabled = currentState === STATE.START || points.length === 0;
-            resetBtn.disabled = currentState === STATE.START || points.length === 0;
-            flipBtn.disabled = currentState === STATE.START;
-            startBtn.disabled = currentState !== STATE.START;
-        }
-
-        function updateStatus(text) {
-            status.textContent = text;
-        }
-
-        updateButtons();
-    </script>
-</body>
-</html>
+      
